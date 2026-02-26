@@ -1,39 +1,27 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
-// Importacion de los Smart Contract: ERC-721.sol y Ownable.sol
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
-// Crear el smart contract para el videojuego NFT
-contract GameContract is ERC721, Ownable {
-    // Constructor de mi Smart Contract
-    constructor(
-        string memory _name,
-        string memory _symbol,
-        string memory treeBossName,
-        uint256 treeBossMaxHpPoints,
-        uint256 treeBossAttackPoints,
-        string memory treeBossImageURI
-    ) ERC721(_name, _symbol) {
-        // Inicilización del jefe arbol
-        treeBoss = TreeBoss({
-            name: treeBossName,
-            maxHpPoints: treeBossMaxHpPoints,
-            hpPoints: treeBossMaxHpPoints,
-            attackPoints: treeBossAttackPoints,
-            imageURI: treeBossImageURI
-        });
-    }
-
+contract SkullGameContract is ERC721, Ownable, ReentrancyGuard, Pausable {
     // ================================== Declaraciones iniciales ========================================
-    // Contador de tokens NFT
-    uint256 skullCounter;
+    uint256 private skullCounter;
+    uint256 public mintCost = 0.01 ether;
+    uint256 public maxSkullsPerUser = 10;
+    
+    mapping(address => uint256) public userSkullCount;
+    mapping(address => bool) public whitelistedMinters;
+    mapping(uint256 => uint256) public lastAttackTime;
+    
+    uint256 public attackCooldown = 1 minutes;
+    uint256 public levelUpCostBase = 0.001 ether;
+    uint256 public reviveCostBase = 0.005 ether;
+    uint256 public attackCostBase = 0.0001 ether;
 
-    // Fijación del precio de los tokens NFT
-    uint256 cost = 0.001 ether; // Aunque despleguemos en diferentes blockchains el precio del smart contract siempre en ethers
-
-    // Estructura de datos con las propiedades del skull
+    // ================================== Estructuras de datos ========================================
     struct Skull {
         uint256 id;
         string name;
@@ -43,6 +31,8 @@ contract GameContract is ERC721, Ownable {
         uint256 maxHpPoints;
         uint256 hpPoints;
         uint256 attackPoints;
+        uint256 experience;
+        uint256 lastBattleTime;
     }
 
     struct TreeBoss {
@@ -51,218 +41,357 @@ contract GameContract is ERC721, Ownable {
         uint256 hpPoints;
         uint256 attackPoints;
         string imageURI;
+        uint256 reward;
     }
 
-    // Estructura de almacenamiento
+    // ================================== Storage ========================================
     Skull[] public skulls;
     TreeBoss public treeBoss;
-    address winnerAddress;
+    address public winnerAddress;
+    bool public gameActive = true;
 
-    // Declaración de un emisor de eventos
-    event CreateSkull(address indexed owner, uint256 id, uint256 dna);
-    event LevelUpSkull(address indexed owner);
-    event ReviveSkull(address indexed owner);
-    event BossAttacked(address indexed owner, bool isBossDefeated);
+    // ================================== Eventos ========================================
+    event SkullMinted(address indexed owner, uint256 indexed id, uint256 dna, uint8 rarity);
+    event SkullLevelUp(address indexed owner, uint256 indexed id, uint8 newLevel);
+    event SkullRevived(address indexed owner, uint256 indexed id);
+    event BossAttacked(address indexed owner, uint256 indexed skullId, uint256 damage, bool isBossDefeated);
+    event BossSpawned(string name, uint256 hp, uint256 reward);
+    event RewardClaimed(address indexed winner, uint256 amount);
+    event GamePaused(address indexed owner);
+    event GameResumed(address indexed owner);
+    event WhitelistUpdated(address indexed account, bool status);
 
-    // ====================================== Modificadores =========================================
-    // Modificador para que solo el ganador pueda sacar dinero
-    modifier onlyWinner(address _direccion) {
+    // ================================== Modificadores ========================================
+    modifier whenGameActive() {
+        require(gameActive, "Game is paused");
+        _;
+    }
+
+    modifier onlySkullOwner(uint256 _skullId) {
+        require(ownerOf(_skullId) == msg.sender, "Not the skull owner");
+        _;
+    }
+
+    modifier withinCooldown(uint256 _skullId) {
         require(
-            winnerAddress == _direccion,
-            "You are not the one who defeated the boss!"
+            block.timestamp >= lastAttackTime[_skullId] + attackCooldown,
+            "Attack on cooldown"
         );
         _;
     }
 
-    // Modificador para que solo el dueño de la skull pueda actuar
-    modifier onlySkullOwner(address _direccion, uint256 _skullId) {
-        require(ownerOf(_skullId) == _direccion);
-        _;
+    // ================================== Constructor ========================================
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _bossName,
+        uint256 _bossMaxHp,
+        uint256 _bossAttack,
+        string memory _bossImageURI,
+        uint256 _bossReward
+    ) ERC721(_name, _symbol) {
+        treeBoss = TreeBoss({
+            name: _bossName,
+            maxHpPoints: _bossMaxHp,
+            hpPoints: _bossMaxHp,
+            attackPoints: _bossAttack,
+            imageURI: _bossImageURI,
+            reward: _bossReward
+        });
+        emit BossSpawned(_bossName, _bossMaxHp, _bossReward);
     }
 
-    // =========================== Funciones del dueño del contrato =========================================
-    // Actualizador del precio del token NFT
-    function updateCost(uint256 _cost) external onlyOwner {
-        cost = _cost;
+    // ================================== Funciones de emergencia ========================================
+    function pause() external onlyOwner whenNotPaused {
+        _pause();
+        gameActive = false;
+        emit GamePaused(msg.sender);
     }
 
-    // Extractor de los ethers del smart contract hacia el owner
-    function withdrawOwner() external payable onlyOwner {
-        address payable _owner = payable(owner()); // Esta funcion owner de Ownable.sol permite obtener el owner sin necesidad de declararlo en el constructor de nuestro contrato
-        _owner.transfer(address(this).balance);
+    function unpause() external onlyOwner whenPaused {
+        _unpause();
+        gameActive = true;
+        emit GameResumed(msg.sender);
     }
 
-    // =========================== Funciones internas del contrato =========================================
-    // Asignador de numeros aleatorios
-    function _createRandomNumber(uint256 _mod) internal view returns (uint256) {
-        uint256 randomNumber = uint256(
-            keccak256(abi.encodePacked(block.timestamp, msg.sender))
-        );
-        return randomNumber % _mod;
+    // ================================== Funciones de configuración ========================================
+    function setMintCost(uint256 _cost) external onlyOwner {
+        mintCost = _cost;
     }
 
-    // Creador del token NFT
-    function _createSkull(string memory _name) internal {
-        uint8 randomRarity = uint8(_createRandomNumber(100));
+    function setMaxSkullsPerUser(uint256 _max) external onlyOwner {
+        maxSkullsPerUser = _max;
+    }
+
+    function setAttackCooldown(uint256 _cooldown) external onlyOwner {
+        attackCooldown = _cooldown;
+    }
+
+    function setWhitelistStatus(address _account, bool _status) external onlyOwner {
+        whitelistedMinters[_account] = _status;
+        emit WhitelistUpdated(_account, _status);
+    }
+
+    // ================================== Funciones de usuario ========================================
+    function createSkull(string memory _name) 
+        external 
+        payable 
+        whenGameActive 
+        whenNotPaused 
+        nonReentrant 
+    {
+        require(msg.value >= mintCost, "Insufficient payment");
+        require(userSkullCount[msg.sender] < maxSkullsPerUser, "Max skulls reached");
+        
+        uint256 randomRarity = _createRandomNumber(100);
         uint256 randomDna = _createRandomNumber(10**16);
-        uint256 maxHp = _createRandomNumber(100) * randomRarity;
-        uint256 attack = _createRandomNumber(10) * randomRarity;
+        uint256 baseHp = _createRandomNumber(100);
+        
+        uint256 maxHp = baseHp * (randomRarity + 10);
+        uint256 attack = (_createRandomNumber(20) + 5) * (randomRarity / 10 + 1);
 
-        Skull memory newSkull = Skull(
-            skullCounter,
-            _name,
-            randomDna,
-            1,
-            randomRarity,
-            maxHp,
-            maxHp, // Por defecto todos los nft empiezan con toda la vida
-            attack
-        );
+        Skull memory newSkull = Skull({
+            id: skullCounter,
+            name: _name,
+            dna: randomDna,
+            level: 1,
+            rarity: uint8(randomRarity),
+            maxHpPoints: maxHp,
+            hpPoints: maxHp,
+            attackPoints: attack,
+            experience: 0,
+            lastBattleTime: 0
+        });
 
         skulls.push(newSkull);
-        _safeMint(msg.sender, skullCounter); // Función de ERC721.sol que asigna al msg sender que ejecute el token el valor del contador
-
-        skullCounter++; 
-        emit CreateSkull(msg.sender, skullCounter, randomDna); // Emitimos el evento de que el token ha sido creado
+        _safeMint(msg.sender, skullCounter);
+        
+        userSkullCount[msg.sender]++;
+        
+        emit SkullMinted(msg.sender, skullCounter, randomDna, uint8(randomRarity));
+        
+        skullCounter++;
     }
 
-    // Subir de nivel los tokens NFT
-    function _levelUpSkull(uint256 _skullId) internal {
+    function levelUpSkull(uint256 _skullId) 
+        external 
+        payable 
+        whenGameActive 
+        nonReentrant 
+        onlySkullOwner(_skullId) 
+    {
         Skull storage skull = skulls[_skullId];
+        
+        uint256 cost = _calculateLevelUpCost(skull.level, skull.rarity);
+        require(msg.value >= cost, "Insufficient payment");
+        
         skull.level++;
-        skull.maxHpPoints = skull.maxHpPoints + 500;
-        skull.attackPoints = skull.attackPoints + 50;
+        skull.maxHpPoints += 500;
+        skull.attackPoints += 50;
         skull.hpPoints = skull.maxHpPoints;
-        emit LevelUpSkull(msg.sender);
+        skull.experience += 100;
+        
+        emit SkullLevelUp(msg.sender, _skullId, skull.level);
     }
 
-    // Revivir un token NFT
-    function _reviveSkull(uint256 _skullId) internal {
+    function reviveSkull(uint256 _skullId) 
+        external 
+        payable 
+        whenGameActive 
+        nonReentrant 
+        onlySkullOwner(_skullId) 
+    {
         Skull storage skull = skulls[_skullId];
+        require(skull.hpPoints == 0, "Skull is alive");
+        
+        uint256 cost = _calculateReviveCost(skull.rarity);
+        require(msg.value >= cost, "Insufficient payment");
+        
         skull.hpPoints = skull.maxHpPoints;
-        skull.level = 1;
-        emit ReviveSkull(msg.sender);
+        
+        emit SkullRevived(msg.sender, _skullId);
     }
 
-    // Iniciar un ataque contra el TreeBoss
-    function _attackBoss(uint256 _skullId) internal {
-        // Muy importante usar el storage para poder modificar los valores del nft
+    function attackBoss(uint256 _skullId) 
+        external 
+        payable 
+        whenGameActive 
+        nonReentrant 
+        onlySkullOwner(_skullId) 
+        withinCooldown(_skullId) 
+    {
         Skull storage skull = skulls[_skullId];
-
-        // Comprobar que el NFT seleccionado tiene mas de 0 HP.
-        require( skull.hpPoints > 0,"Error: La skull tiene que tener vida para poder atacar");
-
-        // Comprobar que el jefe tiene mas de 0 HP.
-        require(treeBoss.hpPoints > 0,"Error: El jefe tiene que tener vida para poder atacar");
-
-        // Permitir que la skull seleccionada ataque al jefe
-        if (treeBoss.hpPoints < skull.attackPoints) {
+        
+        require(skull.hpPoints > 0, "Skull is dead");
+        require(treeBoss.hpPoints > 0, "Boss already defeated");
+        
+        uint256 cost = _calculateAttackCost(skull.rarity, skull.level);
+        require(msg.value >= cost, "Insufficient payment");
+        
+        lastAttackTime[_skullId] = block.timestamp;
+        skull.lastBattleTime = block.timestamp;
+        
+        // Player attacks boss
+        if (treeBoss.hpPoints <= skull.attackPoints) {
             treeBoss.hpPoints = 0;
             winnerAddress = msg.sender;
+            emit BossAttacked(msg.sender, _skullId, skull.attackPoints, true);
         } else {
-            treeBoss.hpPoints = treeBoss.hpPoints - skull.attackPoints;
-        }
-
-        // Permitir que el jefe ataque a la skull seleccionada
-        if (skull.hpPoints < treeBoss.attackPoints) {
-            skull.hpPoints = 0;
-        } else {
-            skull.hpPoints = skull.hpPoints - treeBoss.attackPoints;
-        }
-
-        emit BossAttacked(msg.sender, treeBoss.hpPoints == 0);
-    }
-
-    // ====================================== Funciones publicas del contrato =========================================
-    // Obtención de los tokens de un usuario concreto
-    function getUserSkulls(address _owner)
-        public
-        view
-        returns (Skull[] memory)
-    {
-        Skull[] memory result = new Skull[](balanceOf(_owner));
-
-        uint256 loopCounter = 0;
-        for (uint256 i = 0; i < skulls.length; i++) {
-            if (ownerOf(i) == _owner) {
-                result[loopCounter] = skulls[loopCounter];
-                loopCounter++;
+            treeBoss.hpPoints -= skull.attackPoints;
+            emit BossAttacked(msg.sender, _skullId, skull.attackPoints, false);
+            
+            // Boss counterattacks
+            if (skull.hpPoints <= treeBoss.attackPoints) {
+                skull.hpPoints = 0;
+            } else {
+                skull.hpPoints -= treeBoss.attackPoints;
             }
         }
+        
+        skull.experience += 10;
+    }
 
+    function withdrawWinner() 
+        external 
+        payable 
+        nonReentrant 
+    {
+        require(winnerAddress == msg.sender, "Not the winner");
+        require(treeBoss.hpPoints == 0, "Boss not defeated");
+        
+        uint256 reward = address(this).balance;
+        require(reward > 0, "No reward available");
+        
+        winnerAddress = address(0);
+        treeBoss.hpPoints = treeBoss.maxHpPoints;
+        
+        (bool success, ) = payable(msg.sender).call{value: reward}("");
+        require(success, "Transfer failed");
+        
+        emit RewardClaimed(msg.sender, reward);
+    }
+
+    // ================================== Funciones de consulta ========================================
+    function getUserSkulls(address _owner) 
+        external 
+        view 
+        returns (Skull[] memory) 
+    {
+        uint256 balance = balanceOf(_owner);
+        Skull[] memory result = new Skull[](balance);
+        uint256 index = 0;
+        
+        for (uint256 i = 0; i < skulls.length && index < balance; i++) {
+            if (ownerOf(i) == _owner) {
+                result[index] = skulls[i];
+                index++;
+            }
+        }
+        
         return result;
     }
 
-    // Obtención de todos los tokens NFT
-    function getSkulls() public view returns (Skull[] memory) {
-        return skulls;
+    function getSkull(uint256 _skullId) 
+        external 
+        view 
+        returns (Skull memory) 
+    {
+        require(_skullId < skulls.length, "Invalid skull ID");
+        return skulls[_skullId];
     }
 
-    // Obtención de la información del jefe
-    function getBossInfo() public view returns (TreeBoss memory) {
+    function getBossInfo() 
+        external 
+        view 
+        returns (TreeBoss memory) 
+    {
         return treeBoss;
     }
 
-    // Visualizar la dirección del smart contract
-    function addressSmartContract() public view returns (address) {
-        return address(this);
-    }
-
-    // Visualizar el balance del smart contract
-    function moneySmartContract() public view returns (uint256) {
+    function getContractBalance() 
+        external 
+        view 
+        returns (uint256) 
+    {
         return address(this).balance;
     }
 
-    // Extractor de los ethers del smart contract hacia la direccion del que derroto al jefe
-    function withdrawWinner() public payable onlyWinner(msg.sender) {
-        // Transferimos el dinero al address del usuario que le dio el ultimo golpe al jefe
-        address payable _winner = payable(msg.sender);
-        _winner.transfer(address(this).balance);
+    // ================================== Funciones internas ========================================
+    function _createRandomNumber(uint256 _mod) 
+        internal 
+        view 
+        returns (uint256) 
+    {
+        return uint256(
+            keccak256(
+                abi.encodePacked(
+                    block.timestamp,
+                    block.prevrandao,
+                    msg.sender,
+                    skullCounter
+                )
+            )
+        ) % _mod;
+    }
 
-        // Reseteamos la address del ganador
+    function _calculateLevelUpCost(uint256 _level, uint256 _rarity) 
+        internal 
+        pure 
+        returns (uint256) 
+    {
+        return levelUpCostBase * _level * (_rarity / 10 + 1);
+    }
+
+    function _calculateReviveCost(uint256 _rarity) 
+        internal 
+        pure 
+        returns (uint256) 
+    {
+        return reviveCostBase * (_rarity / 10 + 1);
+    }
+
+    function _calculateAttackCost(uint256 _rarity, uint256 _level) 
+        internal 
+        pure 
+        returns (uint256) 
+    {
+        return attackCostBase * (_rarity / 10 + 1) * _level;
+    }
+
+    // ================================== Funciones de propietario ========================================
+    function withdraw() 
+        external 
+        onlyOwner 
+        nonReentrant 
+    {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No balance to withdraw");
+        
+        (bool success, ) = payable(owner()).call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function setNewBoss(
+        string memory _name,
+        uint256 _maxHp,
+        uint256 _attack,
+        string memory _imageURI,
+        uint256 _reward
+    ) 
+        external 
+        onlyOwner 
+    {
+        treeBoss = TreeBoss({
+            name: _name,
+            maxHpPoints: _maxHp,
+            hpPoints: _maxHp,
+            attackPoints: _attack,
+            imageURI: _imageURI,
+            reward: _reward
+        });
         winnerAddress = address(0);
-
-        // Una vez reclamada la recompensa el boss revive
-        TreeBoss storage boss = treeBoss;
-        boss.hpPoints = boss.maxHpPoints;
+        emit BossSpawned(_name, _maxHp, _reward);
     }
 
-    // Verificación de crear un NFT
-    function createSkull(string memory _name) public payable {
-        require(msg.value >= cost); // Comprobamos que el pago es suficiente
-        _createSkull(_name);
-    }
-
-    // Verificación de subir de nivel un NFT
-    function levelUpSkull(uint256 _skullId)
-        public
-        payable
-        onlySkullOwner(msg.sender, _skullId)
-    {
-        Skull storage skull = skulls[_skullId];
-        require(msg.value >= (skull.level * skull.rarity) / 1000); // Comprobamos que el pago es suficiente
-        _levelUpSkull(_skullId);
-    }
-
-    // Verificación de revivir un NFT
-    function reviveSkull(uint256 _skullId)
-        public
-        payable
-        onlySkullOwner(msg.sender, _skullId)
-    {
-        Skull storage skull = skulls[_skullId];
-        require(msg.value >= skull.rarity / 10); // Comprobamos que el pago es suficiente
-        _reviveSkull(_skullId);
-    }
-
-    // Verificación de atacar al jefe
-    function attackSkull(uint256 _skullId)
-        public
-        payable
-        onlySkullOwner(msg.sender, _skullId)
-    {
-        Skull storage skull = skulls[_skullId];
-        require(msg.value >= (skull.rarity * skull.level) / 10000); // Comprobamos que el pago es suficiente
-        _attackBoss(skull.id);
-    }
+    receive() external payable {}
 }
