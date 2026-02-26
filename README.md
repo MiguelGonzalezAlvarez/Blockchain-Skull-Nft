@@ -1,70 +1,91 @@
-# Getting Started with Create React App
+# Skull NFT Game
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A professional NFT gaming platform built on blockchain where players can collect, battle, and earn rewards with unique skull NFTs.
 
-## Available Scripts
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-In the project directory, you can run:
+## 🎮 Features
 
-### `npm start`
+- **NFT Collection**: Mint unique skull NFTs with randomly generated traits and rarities
+- **Battle System**: Fight against powerful bosses and earn rewards
+- **Level Up**: Enhance your skulls' stats through battles
+- **Multi-Network**: Supports BSC Testnet, Polygon, and Ethereum
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### Rarity System
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+| Rarity    | DNA Range | Chance |
+| --------- | --------- | ------ |
+| Common    | 0-49      | 50%    |
+| Rare      | 50-79     | 30%    |
+| Legendary | 80-94     | 15%    |
+| Mythic    | 95-99     | 5%     |
 
-### `npm test`
+## 🛠️ Tech Stack
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- **React 18** - UI library
+- **TypeScript** - Type safety
+- **Vite** - Build tool
+- **Redux Toolkit** - State management
+- **Styled Components** - Styling
+- **Solidity** - Smart contracts
+- **Web3.js** - Blockchain interaction
 
-### `npm run build`
+## 🚀 Getting Started
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### Prerequisites
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+- Node.js 18+
+- npm or yarn
+- MetaMask wallet
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### Installation
 
-### `npm run eject`
+```bash
+# Install dependencies
+npm install
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+# Start development server
+npm run dev
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+# Build for production
+npm run build
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## 📁 Project Structure
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```
+src/
+├── components/        # React components
+├── pages/           # Page components
+├── services/        # Web3 services
+├── store/           # Redux store
+├── styles/          # Theme & styles
+└── types/           # TypeScript types
+```
 
-## Learn More
+## 🔒 Smart Contract
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+The smart contract includes:
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- Reentrancy guards
+- Pausable for emergencies
+- Attack cooldowns
+- User limits
+- Event logging
 
-### Code Splitting
+## 🤝 Contributing
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Open a Pull Request
 
-### Analyzing the Bundle Size
+## 📄 License
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+This project is licensed under the MIT License.
 
-### Making a Progressive Web App
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+Built with ❤️ using React, TypeScript, and Solidity
